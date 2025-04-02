@@ -468,6 +468,50 @@ async def chroma_update_documents(
             f"Failed to update documents in collection '{collection_name}': {str(e)}"
         ) from e
 
+@mcp.tool()
+async def chroma_delete_documents(
+    collection_name: str,
+    ids: Optional[List[str]] = None,
+    where: Optional[Dict] = None,
+    where_document: Optional[Dict] = None
+) -> str:
+    """Delete documents from a Chroma collection by IDs or filtering conditions.
+
+    Args:
+        collection_name: Name of the collection to delete documents from (required).
+        ids: Optional list of document IDs to delete.
+        where: Optional metadata filters to select documents for deletion.
+        where_document: Optional document content filters to select documents for deletion.
+
+    Returns:
+        A confirmation message indicating the delete request was processed.
+
+    Raises:
+        ValueError: If 'collection_name' is a protected collection, or if none of
+                    'ids', 'where', or 'where_document' are provided, or if both
+                    'ids' and filtering conditions ('where'/'where_document') are provided.
+        Exception: If the collection does not exist or if the delete operation fails.
+    """
+    # Validate arguments: At least one deletion criterion must be provided.
+    if ids is None and where is None and where_document is None:
+        raise ValueError("No deletion criteria provided. Please specify 'ids', 'where', or 'where_document'.")
+
+    # Validate arguments: Cannot provide both 'ids' and filtering conditions.
+    if ids is not None and (where is not None or where_document is not None):
+        raise ValueError("Cannot provide both 'ids' and filtering conditions ('where' or 'where_document'). Please use either 'ids' or filters.")
+
+    client = get_chroma_client()
+    try:
+        collection = client.get_collection(collection_name)
+        collection.delete(ids=ids, where=where, where_document=where_document)
+        # Return a simple string confirmation
+        return f"Successfully processed delete request for collection '{collection_name}'."
+    except Exception as e:
+        # Catch potential exceptions from get_collection or delete
+        # (e.g., collection not found, database errors)
+        print(f"Error deleting documents from collection '{collection_name}': {str(e)}")
+        raise  # Re-raise the exception to be handled by the MCP framework
+
 def validate_thought_data(input_data: Dict) -> Dict:
     """Validate thought data structure."""
     if not input_data.get("sessionId"):

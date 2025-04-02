@@ -7,6 +7,7 @@ from unittest.mock import patch, MagicMock
 import argparse
 from mcp.server.fastmcp.exceptions import ToolError # Import ToolError
 import json # Import json for parsing results
+import pytest_asyncio # Import pytest_asyncio for async fixtures
 
 
 # Add pytest-asyncio marker
@@ -411,3 +412,176 @@ async def test_update_documents_id_not_found():
     finally:
         # Clean up
         await mcp.call_tool("chroma_delete_collection", {"collection_name": collection_name})
+
+# --- Tests for chroma_delete_documents ---
+
+@pytest_asyncio.fixture
+async def setup_delete_test_collection():
+    """Fixture to set up a collection with documents for deletion tests."""
+    collection_name = "test_delete_docs_collection"
+    client = get_chroma_client()
+
+    # Ensure clean state
+    try:
+        client.delete_collection(collection_name)
+    except Exception:
+        pass
+
+    # Create collection and add documents using the client directly
+    collection = client.get_or_create_collection(collection_name)
+    collection.add(
+        documents=["doc1 text", "doc2 text", "another doc", "doc4 special"],
+        metadatas=[{"type": "a", "val": 1}, {"type": "b", "val": 2}, {"type": "a", "val": 3}, {"type": "c", "val": 4}],
+        ids=["id1", "id2", "id3", "id4"]
+    )
+
+    yield collection_name
+
+    # Teardown: Delete the collection after the test
+    try:
+        client.delete_collection(collection_name)
+    except Exception as e:
+        print(f"Error during teardown deleting collection {collection_name}: {e}")
+
+
+@pytest.mark.asyncio
+async def test_delete_documents_by_ids(setup_delete_test_collection):
+    """Test deleting documents by providing a list of IDs."""
+    collection_name = setup_delete_test_collection
+    ids_to_delete = ["id1", "id3"]
+
+    delete_result = await mcp.call_tool("chroma_delete_documents", {
+        "collection_name": collection_name,
+        "ids": ids_to_delete
+    })
+    # Check result type and content (assuming tool returns string in a list)
+    assert isinstance(delete_result, list)
+    assert len(delete_result) >= 1
+    assert hasattr(delete_result[0], 'text')
+    assert f"Successfully processed delete request for collection '{collection_name}'" in delete_result[0].text
+
+    # Verify deletion using the client directly
+    client = get_chroma_client()
+    collection = client.get_collection(collection_name)
+    remaining_docs = collection.get(include=["metadatas"])
+    assert "id1" not in remaining_docs["ids"]
+    assert "id3" not in remaining_docs["ids"]
+    assert "id2" in remaining_docs["ids"]
+    assert "id4" in remaining_docs["ids"]
+    assert len(remaining_docs["ids"]) == 2
+
+@pytest.mark.asyncio
+async def test_delete_documents_by_where(setup_delete_test_collection):
+    """Test deleting documents using a 'where' filter."""
+    collection_name = setup_delete_test_collection
+    where_filter = {"type": "a"}
+
+    delete_result = await mcp.call_tool("chroma_delete_documents", {
+        "collection_name": collection_name,
+        "where": where_filter
+    })
+    assert isinstance(delete_result, list)
+    assert len(delete_result) >= 1
+    assert hasattr(delete_result[0], 'text')
+    assert f"Successfully processed delete request for collection '{collection_name}'" in delete_result[0].text
+
+    # Verify deletion
+    client = get_chroma_client()
+    collection = client.get_collection(collection_name)
+    remaining_docs = collection.get(include=["metadatas"])
+    assert "id1" not in remaining_docs["ids"]
+    assert "id3" not in remaining_docs["ids"]
+    assert "id2" in remaining_docs["ids"]
+    assert "id4" in remaining_docs["ids"]
+    assert len(remaining_docs["ids"]) == 2
+    for meta in remaining_docs["metadatas"]:
+        assert meta["type"] != "a"
+
+@pytest.mark.asyncio
+async def test_delete_documents_by_where_document(setup_delete_test_collection):
+    """Test deleting documents using a 'where_document' filter."""
+    collection_name = setup_delete_test_collection
+    where_doc_filter = {"$contains": "special"}
+
+    delete_result = await mcp.call_tool("chroma_delete_documents", {
+        "collection_name": collection_name,
+        "where_document": where_doc_filter
+    })
+    assert isinstance(delete_result, list)
+    assert len(delete_result) >= 1
+    assert hasattr(delete_result[0], 'text')
+    assert f"Successfully processed delete request for collection '{collection_name}'" in delete_result[0].text
+
+    # Verify deletion
+    client = get_chroma_client()
+    collection = client.get_collection(collection_name)
+    remaining_docs = collection.get(include=["documents"])
+    assert "id4" not in remaining_docs["ids"]
+    assert "id1" in remaining_docs["ids"]
+    assert "id2" in remaining_docs["ids"]
+    assert "id3" in remaining_docs["ids"]
+    assert len(remaining_docs["ids"]) == 3
+    for doc in remaining_docs["documents"]:
+        assert "special" not in doc
+
+
+@pytest.mark.asyncio
+async def test_delete_documents_no_criteria_error(setup_delete_test_collection):
+    """Test error when no deletion criteria are provided."""
+    collection_name = setup_delete_test_collection
+
+    with pytest.raises(ToolError, match="No deletion criteria provided"):
+        await mcp.call_tool("chroma_delete_documents", {
+            "collection_name": collection_name
+        })
+
+@pytest.mark.asyncio
+async def test_delete_documents_both_ids_and_filter_error(setup_delete_test_collection):
+    """Test error when both 'ids' and a filter are provided."""
+    collection_name = setup_delete_test_collection
+
+    with pytest.raises(ToolError, match="Cannot provide both 'ids' and filtering conditions"):
+        await mcp.call_tool("chroma_delete_documents", {
+            "collection_name": collection_name,
+            "ids": ["id1"],
+            "where": {"type": "a"}
+        })
+
+    with pytest.raises(ToolError, match="Cannot provide both 'ids' and filtering conditions"):
+        await mcp.call_tool("chroma_delete_documents", {
+            "collection_name": collection_name,
+            "ids": ["id1"],
+            "where_document": {"$contains": "text"}
+        })
+
+@pytest.mark.asyncio
+async def test_delete_documents_nonexistent_collection():
+    """Test error when trying to delete from a non-existent collection."""
+    collection_name = "nonexistent_collection_for_delete"
+
+    with pytest.raises(ToolError): # Catch ToolError wrapping the underlying exception
+         await mcp.call_tool("chroma_delete_documents", {
+            "collection_name": collection_name,
+            "ids": ["id_does_not_matter"]
+        })
+
+@pytest.mark.asyncio
+async def test_delete_documents_nonexistent_ids(setup_delete_test_collection):
+    """Test deleting non-existent IDs does not raise an error."""
+    collection_name = setup_delete_test_collection
+    ids_to_delete = ["nonexistent_id1", "nonexistent_id2"]
+
+    delete_result = await mcp.call_tool("chroma_delete_documents", {
+        "collection_name": collection_name,
+        "ids": ids_to_delete
+    })
+    assert isinstance(delete_result, list)
+    assert len(delete_result) >= 1
+    assert hasattr(delete_result[0], 'text')
+    assert f"Successfully processed delete request for collection '{collection_name}'" in delete_result[0].text
+
+    # Verify no documents were actually deleted
+    client = get_chroma_client()
+    collection = client.get_collection(collection_name)
+    count_after = collection.count()
+    assert count_after == 4
