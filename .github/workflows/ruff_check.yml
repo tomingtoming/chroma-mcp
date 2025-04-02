@@ -1,0 +1,25 @@
+name: Ruff Check
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # プロジェクトの要件に合わせて調整可能
+      - name: Install uv
+        run: pip install uv
+      - name: Install dependencies
+        run: uv pip install -e '.[dev]'
+      - name: Ruff Format Check
+        run: ruff format --check .
+      - name: Ruff Lint Check
+        run: ruff check .

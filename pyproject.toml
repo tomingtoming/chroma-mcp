@@ -21,6 +21,12 @@ dependencies = [
     "python-dotenv>=0.19.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "ruff>=0.1.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/chroma-core/chroma-mcp"
 Documentation = "https://github.com/chroma-core/chroma-mcp#readme"
@@ -38,6 +44,17 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 
 [tool.ruff]
+# Common settings
+line-length = 100
+
+[tool.ruff.lint]
+# Linting rules
 select = ["E", "F", "B", "I"]
 ignore = []
-line-length = 100
+
+[tool.ruff.format]
+# Formatting options
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
