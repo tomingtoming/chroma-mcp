@@ -5,6 +5,9 @@ import sys
 import os
 from unittest.mock import patch, MagicMock
 import argparse
+from mcp.server.fastmcp.exceptions import ToolError # Import ToolError
+import json # Import json for parsing results
+
 
 # Add pytest-asyncio marker
 pytest_plugins = ['pytest_asyncio']
@@ -262,3 +265,149 @@ def test_required_args_for_cloud_client():
         mock_error.assert_called_with(
             "API key must be provided via --api-key flag or CHROMA_API_KEY environment variable when using cloud client"
         )
+
+# --- Tests for chroma_update_documents ---
+
+@pytest.mark.asyncio
+async def test_update_documents_success():
+    """Test successful document update."""
+    collection_name = "test_update_collection_success"
+    doc_ids = ["doc1", "doc2"]
+    initial_docs = ["Initial doc 1", "Initial doc 2"]
+    initial_metadatas = [{"source": "initial"}, {"source": "initial"}]
+    updated_docs = ["Updated doc 1", initial_docs[1]] # Update only first doc content
+    updated_metadatas = [initial_metadatas[0], {"source": "updated"}] # Update only second doc metadata
+
+    try:
+        # 1. Create collection
+        await mcp.call_tool("chroma_create_collection", {"collection_name": collection_name})
+
+        # 2. Add initial documents
+        await mcp.call_tool("chroma_add_documents", {
+            "collection_name": collection_name,
+            "documents": initial_docs,
+            "metadatas": initial_metadatas,
+            "ids": doc_ids
+        })
+
+        # 3. Update documents (pass both documents and metadatas)
+        update_result = await mcp.call_tool("chroma_update_documents", {
+            "collection_name": collection_name,
+            "ids": doc_ids,
+            "documents": updated_docs,
+            "metadatas": updated_metadatas
+        })
+        assert len(update_result) == 1
+        # Updated success message check
+        assert (
+            f"Successfully processed update request for {len(doc_ids)} documents"
+            in update_result[0].text
+        )
+
+        # 4. Verify updates
+        get_result_raw = await mcp.call_tool("chroma_get_documents", {
+            "collection_name": collection_name,
+            "ids": doc_ids,
+            "include": ["documents", "metadatas"]
+        })
+        # Corrected: Parse the JSON string from TextContent
+        assert len(get_result_raw) == 1
+        get_result = json.loads(get_result_raw[0].text)
+        assert isinstance(get_result, dict)
+
+        assert get_result.get("ids") == doc_ids
+        # Check updated document content
+        assert get_result.get("documents") == updated_docs
+        # Check updated metadata
+        assert get_result.get("metadatas") == updated_metadatas
+
+    finally:
+        # Clean up
+        await mcp.call_tool("chroma_delete_collection", {"collection_name": collection_name})
+
+@pytest.mark.asyncio
+async def test_update_documents_invalid_args():
+    """Test update documents with invalid arguments."""
+    collection_name = "test_update_collection_invalid"
+
+    try:
+        await mcp.call_tool("chroma_create_collection", {"collection_name": collection_name})
+        await mcp.call_tool("chroma_add_documents", {
+            "collection_name": collection_name,
+            "documents": ["Test doc"],
+            "ids": ["doc1"]
+        })
+
+        # Test with empty IDs list - Expect ToolError wrapping ValueError
+        with pytest.raises(ToolError, match="The 'ids' list cannot be empty."):
+            await mcp.call_tool("chroma_update_documents", {
+                "collection_name": collection_name,
+                "ids": [],
+                "documents": ["New content"]
+            })
+
+        # Test with no update fields provided - Expect ToolError wrapping ValueError
+        with pytest.raises(
+            ToolError,
+            match="At least one of 'embeddings', 'metadatas', or 'documents' must be provided"
+        ):
+            await mcp.call_tool("chroma_update_documents", {
+                "collection_name": collection_name,
+                "ids": ["doc1"]
+                # No embeddings, metadatas, or documents
+            })
+
+    finally:
+        # Clean up
+        await mcp.call_tool("chroma_delete_collection", {"collection_name": collection_name})
+
+@pytest.mark.asyncio
+async def test_update_documents_collection_not_found():
+    """Test updating documents in a non-existent collection."""
+    # Expect ToolError wrapping the Exception from the function
+    with pytest.raises(ToolError, match="Failed to get collection"):
+        await mcp.call_tool("chroma_update_documents", {
+            "collection_name": "non_existent_collection",
+            "ids": ["doc1"],
+            "documents": ["New content"]
+        })
+
+@pytest.mark.asyncio
+async def test_update_documents_id_not_found():
+    """Test updating a document with an ID that does not exist. Expect no exception."""
+    collection_name = "test_update_id_not_found"
+    try:
+        await mcp.call_tool("chroma_create_collection", {"collection_name": collection_name})
+        await mcp.call_tool("chroma_add_documents", {
+            "collection_name": collection_name,
+            "documents": ["Test doc"],
+            "ids": ["existing_id"]
+        })
+
+        # Attempt to update a non-existent ID - should not raise Exception
+        update_result = await mcp.call_tool("chroma_update_documents", {
+            "collection_name": collection_name,
+            "ids": ["non_existent_id"],
+            "documents": ["New content"]
+        })
+        # Check the success message (even though the ID didn't exist)
+        assert len(update_result) == 1
+        assert "Successfully processed update request" in update_result[0].text
+
+        # Optionally, verify that the existing document was not changed
+        get_result_raw = await mcp.call_tool("chroma_get_documents", {
+            "collection_name": collection_name,
+            "ids": ["existing_id"],
+            "include": ["documents"]
+        })
+        # Corrected assertion: Parse JSON and check structure/content
+        assert len(get_result_raw) == 1
+        get_result = json.loads(get_result_raw[0].text)
+        assert isinstance(get_result, dict)
+        assert "documents" in get_result
+        assert isinstance(get_result["documents"], list)
+        assert get_result["documents"] == ["Test doc"]
+
+    finally:
+        # Clean up
+        await mcp.call_tool("chroma_delete_collection", {"collection_name": collection_name})

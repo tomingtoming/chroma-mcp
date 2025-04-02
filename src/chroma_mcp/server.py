@@ -392,7 +392,82 @@ async def chroma_get_documents(
         limit=limit,
         offset=offset
     )
-    
+
+@mcp.tool()
+async def chroma_update_documents(
+    collection_name: str,
+    ids: List[str],
+    embeddings: Optional[List[List[float]]] = None,
+    metadatas: Optional[List[Dict]] = None,
+    documents: Optional[List[str]] = None
+) -> str:
+    """Update documents in a Chroma collection.
+
+    Args:
+        collection_name: Name of the collection to update documents in
+        ids: List of document IDs to update (required)
+        embeddings: Optional list of new embeddings for the documents.
+                    Must match length of ids if provided.
+        metadatas: Optional list of new metadata dictionaries for the documents.
+                   Must match length of ids if provided.
+        documents: Optional list of new text documents.
+                   Must match length of ids if provided.
+
+    Returns:
+        A confirmation message indicating the number of documents updated.
+
+    Raises:
+        ValueError: If 'ids' is empty or if none of 'embeddings', 'metadatas',
+                    or 'documents' are provided, or if the length of provided
+                    update lists does not match the length of 'ids'.
+        Exception: If the collection does not exist or if the update operation fails.
+    """
+    if not ids:
+        raise ValueError("The 'ids' list cannot be empty.")
+
+    if embeddings is None and metadatas is None and documents is None:
+        raise ValueError(
+            "At least one of 'embeddings', 'metadatas', or 'documents' "
+            "must be provided for update."
+        )
+
+    # Ensure provided lists match the length of ids if they are not None
+    if embeddings is not None and len(embeddings) != len(ids):
+        raise ValueError("Length of 'embeddings' list must match length of 'ids' list.")
+    if metadatas is not None and len(metadatas) != len(ids):
+        raise ValueError("Length of 'metadatas' list must match length of 'ids' list.")
+    if documents is not None and len(documents) != len(ids):
+        raise ValueError("Length of 'documents' list must match length of 'ids' list.")
+
+
+    client = get_chroma_client()
+    try:
+        collection = client.get_collection(collection_name)
+    except Exception as e:
+        raise Exception(
+            f"Failed to get collection '{collection_name}': {str(e)}"
+        ) from e
+
+    # Prepare arguments for update, excluding None values at the top level
+    update_args = {
+        "ids": ids,
+        "embeddings": embeddings,
+        "metadatas": metadatas,
+        "documents": documents,
+    }
+    kwargs = {k: v for k, v in update_args.items() if v is not None}
+
+    try:
+        collection.update(**kwargs)
+        return (
+            f"Successfully processed update request for {len(ids)} documents in "
+            f"collection '{collection_name}'. Note: Non-existent IDs are ignored by ChromaDB."
+        )
+    except Exception as e:
+        raise Exception(
+            f"Failed to update documents in collection '{collection_name}': {str(e)}"
+        ) from e
+
 def validate_thought_data(input_data: Dict) -> Dict:
     """Validate thought data structure."""
     if not input_data.get("sessionId"):
